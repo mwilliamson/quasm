@@ -1,0 +1,17 @@
+const 6
+const 1
+swap 1
+:loop
+dup
+const 0
+cmp
+jle :end
+dup
+swap 2
+mul
+swap 1
+const -1
+add
+jmp :loop
+:end
+pop

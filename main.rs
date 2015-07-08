@@ -19,29 +19,73 @@ fn main() -> () {
         Ok(_) => println!("Finished"),
         Err(e) => println!("{}", e)
     }
-    //println!(source_path)
+}
+
+enum Line<'a> {
+    Instruction { opcode: &'a str, arg: Argument<'a> },
+    Label { name: &'a str }
+}
+
+enum Argument<'a> {
+    Integer(i16),
+    Label(&'a str),
+    None
+}
+
+struct Instruction<'a> {
+    opcode: &'a str,
+    arg: i16
 }
 
 fn compile(source_path: &String, destination_path: &String) -> io::Result<()> {
-    let lines = try!(read_lines(source_path));
-    let bytecodes = lines.into_iter().map(parse_line);
+    let raw_lines = try!(read_lines(source_path));
+    let lines = raw_lines.iter().map(parse_line);
+    let instructions = resolve(lines);
+    // let instructions = lines.map(resolve_line);
+    let bytecodes = instructions.map(encode_instruction);
     write_lines(destination_path, bytecodes)
 }
 
-// String -> Line
-fn parse_line(line: String) -> i32 {
+fn parse_line<'a>(line: &'a String) -> Line<'a> {
+    // line.starts_with(":")
     let mut parts = line.split(" ");
-    let opcode = opcode(parts.next().unwrap());
+    let opcode = parts.next().unwrap();
     // TODO: reject args for noarg opcodes
     // let arg = parts.next().map(std::str::FromStr<i16>::from_str).unwrap_or(0);
     let arg = parts.next()
         // TODO: don't drop parse errors on the floor
         .and_then(|s| s.parse::<i16>().ok())
-        .unwrap_or(0);
-    opcode + ((arg as i32) << 16)
+        .map_or(Argument::None, |v| Argument::Integer(v));
+    Line::Instruction { opcode: opcode, arg: arg }
 }
 
-fn opcode(name: &str) -> i32 {
+fn resolve<'a, I: Iterator<Item=Line<'a>> + 'a>(lines: I) -> Box<Iterator<Item=Instruction<'a>> + 'a> {
+    Box::new(lines.map(resolve_line))
+}
+
+fn resolve_line<'a>(line: Line<'a>) -> Instruction<'a> {
+    match line {
+        Line::Instruction { opcode: opcode, arg: arg } =>
+            Instruction { opcode: opcode, arg: resolve_arg(arg) },
+        _ => panic!("Not implemented")
+    }
+}
+
+fn resolve_arg<'a>(argument: Argument<'a>) -> i16 {
+    match argument {
+        Argument::Integer(value) => value,
+        Argument::Label(name) => panic!("Not implemented"),
+        Argument::None => 0
+    }
+}
+
+fn encode_instruction<'a>(instruction: Instruction<'a>) -> i32 {
+    let bytecode = encode_opcode(&instruction.opcode);
+    let arg = instruction.arg as i32;
+    bytecode + (arg << 16)
+}
+
+fn encode_opcode(name: &str) -> i32 {
     match name {
         "const" => 0, // value << 16
         "pop" => 1,
