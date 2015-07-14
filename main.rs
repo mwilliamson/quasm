@@ -5,6 +5,8 @@ use std::io::BufRead;
 use std::io::Write;
 use std::io::BufReader;
 use std::io::BufWriter;
+use std::collections::HashMap;
+use std::ops::RangeFrom;
 
 fn main() -> () {
     println!("Hello, world!");
@@ -40,42 +42,55 @@ struct Instruction<'a> {
 fn compile(source_path: &String, destination_path: &String) -> io::Result<()> {
     let raw_lines = try!(read_lines(source_path));
     let lines = raw_lines.iter().map(parse_line);
-    let instructions = resolve(lines);
-    // let instructions = lines.map(resolve_line);
-    let bytecodes = instructions.map(encode_instruction);
+    let instructions = resolve(lines.collect());
+    let bytecodes = instructions.into_iter().map(encode_instruction);
     write_lines(destination_path, bytecodes)
 }
 
 fn parse_line<'a>(line: &'a String) -> Line<'a> {
-    // line.starts_with(":")
-    let mut parts = line.split(" ");
-    let opcode = parts.next().unwrap();
-    // TODO: reject args for noarg opcodes
-    // let arg = parts.next().map(std::str::FromStr<i16>::from_str).unwrap_or(0);
-    let arg = parts.next()
-        // TODO: don't drop parse errors on the floor
-        .and_then(|s| s.parse::<i16>().ok())
-        .map_or(Argument::None, |v| Argument::Integer(v));
-    Line::Instruction { opcode: opcode, arg: arg }
-}
-
-fn resolve<'a, I: Iterator<Item=Line<'a>> + 'a>(lines: I) -> Box<Iterator<Item=Instruction<'a>> + 'a> {
-    Box::new(lines.map(resolve_line))
-}
-
-fn resolve_line<'a>(line: Line<'a>) -> Instruction<'a> {
-    match line {
-        Line::Instruction { opcode: opcode, arg: arg } =>
-            Instruction { opcode: opcode, arg: resolve_arg(arg) },
-        _ => panic!("Not implemented")
+    if line.starts_with(":") {
+        Line::Label { name: line }
+    } else {
+        let mut parts = line.split(" ");
+        let opcode = parts.next().unwrap();
+        // TODO: reject args for noarg opcodes
+        let arg = parse_arg(parts.next());
+        Line::Instruction { opcode: opcode, arg: arg }
     }
 }
 
-fn resolve_arg<'a>(argument: Argument<'a>) -> i16 {
+fn parse_arg(part: Option<&str>) -> Argument {
+    // TODO: don't drop parse errors on the floor
+    part.and_then(
+        |s|
+        if s.starts_with(":") {
+            Some(Argument::Label(s))
+        } else {
+            s.parse::<i16>().ok().map(Argument::Integer)
+        })
+        .unwrap_or(Argument::None)
+}
+
+fn resolve<'a>(lines: Vec<Line<'a>>) -> Vec<Instruction<'a>> {
+    let lines_with_addresses = lines_with_addresses(lines);
+    let label_addresses = find_labels(&lines_with_addresses);
+    lines_with_addresses.into_iter().filter_map(|line| resolve_line(&label_addresses, line)).collect()
+}
+
+fn resolve_line<'a>(label_addresses: &HashMap<String, i16>, (line, address) : (Line<'a>, i16)) -> Option<Instruction<'a>> {
+    match line {
+        Line::Instruction { opcode: opcode, arg: arg } =>
+            Option::Some(Instruction { opcode: opcode, arg: resolve_arg(label_addresses, address, &arg) }),
+        _ =>
+            Option::None
+    }
+}
+
+fn resolve_arg<'a>(label_addresses: &HashMap<String, i16>, address: i16, argument: &Argument<'a>) -> i16 {
     match argument {
-        Argument::Integer(value) => value,
-        Argument::Label(name) => panic!("Not implemented"),
-        Argument::None => 0
+        &Argument::Integer(value) => value,
+        &Argument::Label(name) => label_addresses[name.to_string()] - (address + 1),
+        &Argument::None => 0
     }
 }
 
@@ -98,6 +113,35 @@ fn encode_opcode(name: &str) -> i32 {
         "jle" => 8,
         _ => panic!("Unrecognised opcode")
     }
+}
+
+fn lines_with_addresses<'a>(lines: Vec<Line<'a>>) -> Vec<(Line<'a>, i16)> {
+    let mut address = 0;
+    let mut result = Vec::new();
+    for line in lines.into_iter() {
+        let is_instruction = match line {
+            Line::Instruction {..} => true,
+            _ => false
+        };
+        result.push((line, address));
+        if is_instruction {
+            address += 1
+        }
+    }
+    result
+}
+
+fn find_labels<'a>(lines: &Vec<(Line<'a>, i16)>) -> HashMap<String, i16> {
+    let mut labels = HashMap::new();
+    for &(ref line, address) in lines {
+        match line {
+            &Line::Label { name: name } => {
+                labels.insert(name.to_string(), address);
+            },
+            _ => ()
+        }
+    }
+    labels
 }
 
 fn read_lines(path: &String) -> io::Result<Vec<String>> {
